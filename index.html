@@ -151,7 +151,7 @@ const KITS = {
     sottotitolo: 'Solo formato 35mm',
     icon: 'sun',
     configurazioni: [
-      { id: '1x35', label: '1 Pellicola 35mm', formato: '35mm', numPellicole: 1, volumeMl: 250 },
+      { id: '1x35', label: '1 Pellicola 35mm', formato: '35mm', numPellicole: 1, volumeMl: 350 },
     ],
   },
 };
@@ -225,19 +225,44 @@ const PROFILI_AGITAZIONE = {
 };
 const PROFILO_AGITAZIONE_DEFAULT = 'rodinal'; // consigliato per Fomapan 200 + Rodinal 1+50
 
+// Ricette pronte per pellicola: ogni ricetta abbina diluizione + profilo di agitazione,
+// così basta scegliere la pellicola e una ricetta per avere tutto pronto (Rodinal 1+50 è
+// preselezionata di default, `predefinita: true`). MODIFICA QUI per aggiungere/tarare ricette.
+// N.B. le voci "Stand"/"Semi-stand" riusano lo stesso tempo di sviluppo del Rodinal 1+50
+// "normale": non ho dati di riferimento per uno stand development vero e proprio (che in
+// genere usa tempi molto più lunghi, anche 1h+, e diluizioni più spinte tipo 1+100) — se hai
+// tempi precisi per il tuo stand development fammelo sapere e li aggiungo come voce separata.
+const RICETTE = {
+  fp100: [
+    { id: 'fp100-125', nome: 'Rodinal 1+25', diluizione: '1+25', profilo: 'rodinal' },
+    { id: 'fp100-150', nome: 'Rodinal 1+50', diluizione: '1+50', profilo: 'rodinal', predefinita: true },
+    { id: 'fp100-stand', nome: 'Rodinal 1+50 (Stand)', diluizione: '1+50', profilo: 'semistand' },
+  ],
+  fp200: [
+    { id: 'fp200-125', nome: 'Rodinal 1+25', diluizione: '1+25', profilo: 'rodinal' },
+    { id: 'fp200-150', nome: 'Rodinal 1+50', diluizione: '1+50', profilo: 'rodinal', predefinita: true },
+    { id: 'fp200-stand', nome: 'Rodinal 1+50 (Stand)', diluizione: '1+50', profilo: 'semistand' },
+  ],
+  fp400: [
+    { id: 'fp400-125', nome: 'Rodinal 1+25', diluizione: '1+25', profilo: 'rodinal' },
+    { id: 'fp400-150', nome: 'Rodinal 1+50', diluizione: '1+50', profilo: 'rodinal', predefinita: true },
+    { id: 'fp400-semistand', nome: 'Rodinal 1+50 (Semi-stand)', diluizione: '1+50', profilo: 'semistand' },
+  ],
+};
+
 // Fasi successive allo sviluppo: sempre uguali, indipendenti da pellicola/kit.
 // diluizioneN = "N" nel rapporto 1+N (1 parte chimico, N parti acqua).
 // diluizioneN = null → nessuna miscela da preparare (solo acqua corrente/demineralizzata).
 const FASI_FISSE = [
   // Il bagno d'arresto è breve: si tiene il tank in agitazione continua fino alla fine — modifica qui se preferisci un altro schema.
-  { key: 'arresto', nome: 'Arresto', chimico: 'ADOSTOP', durata: 60, diluizioneN: 19, schemaAgitazione: CONTINUA_AGITAZIONE },
+  { key: 'arresto', nome: 'Arresto', chimico: 'ADOSTOP', durata: 30, diluizioneN: 19, schemaAgitazione: CONTINUA_AGITAZIONE },
   // Per il fissaggio riuso il profilo "Rodinal normale" (30s + 10s/min): assunzione ragionevole, modificabile qui.
   { key: 'fissaggio', nome: 'Fissaggio', chimico: 'ADOFIX', durata: 300, diluizioneN: 4, schemaAgitazione: PROFILI_AGITAZIONE.rodinal },
   { key: 'lavaggio', nome: 'Lavaggio', chimico: 'ACQUA', durata: 600, diluizioneN: null, schemaAgitazione: NESSUNA_AGITAZIONE,
-    nota: 'Imbando a cascata, oppure metodo Ilford: 1 inversione, cambio acqua + 5 inversioni, cambio acqua + 10 inversioni, cambio acqua + 20 inversioni.' },
+    nota: 'Metodo Ilford: riempi e fai 5 inversioni, svuota; riempi e fai 10 inversioni, svuota; riempi e fai 20 inversioni, svuota. Con la Lomo Daylight Tank puoi anche usare il ricircolo continuo previsto dal produttore.' },
   // N.B. diluizione Adoflo stimata (1+200): verifica la scheda tecnica del tuo lotto e modifica qui.
   { key: 'imbibente', nome: 'Imbibente', chimico: 'ADOFLO', durata: 60, diluizioneN: 200, schemaAgitazione: NESSUNA_AGITAZIONE,
-    nota: 'In acqua demineralizzata. Un\'agitazione vigorosa crea solo schiuma: al massimo una singola immersione delicata.' },
+    nota: 'In acqua demineralizzata, agitazione molto delicata (30-60s). Non risciacquare dopo l\'imbibente.' },
 ];
 
 // Colori/etichette per chimico, usati per badge e anello del timer
@@ -253,7 +278,7 @@ const STILE_CHIMICO = {
    2. UTILITY
    ===================================================================== */
 
-// Calcola i ml di chimico e acqua dato il volume totale del tank e la diluizione 1+N
+// Calcola i ml di chimico e acqua dato il volume totale del tank e la diluizione 1+N (valori esatti, non arrotondati)
 function calcolaMix(volumeTotaleMl, diluizioneN) {
   if (diluizioneN === null || diluizioneN === undefined) return null;
   const chimico = volumeTotaleMl / (diluizioneN + 1);
@@ -261,13 +286,40 @@ function calcolaMix(volumeTotaleMl, diluizioneN) {
   return { chimicoMl: chimico, acquaMl: acqua };
 }
 
-// Il chimico va misurato con precisione (spesso pochi ml): 1 decimale.
-function fmtMlChimico(v) {
-  return (Math.round(v * 10) / 10).toString().replace(/\.0$/, '');
+// Regola di arrotondamento per ciascun chimico, tarata sulla ricetta di riferimento a 350ml
+// (Lomo Daylight Tank): Rodinal e Adoflo sono dosi piccole e molto concentrate, misurate con
+// una siringa/cilindrino — si arrotondano per eccesso al ml intero (meglio un filo più forte
+// che sotto-dosare). Adostop e Adofix si misurano con un cilindro più grande: si mostra il
+// valore esatto, anche a mezzo ml (es. 17,5 ml). MODIFICA QUI se preferisci altre precisioni.
+const ARROTONDAMENTO_CHIMICO = {
+  RODINAL: { precisione: 1, modo: 'su' },
+  ADOSTOP: { precisione: 0.5, modo: 'vicino' },
+  ADOFIX: { precisione: 0.5, modo: 'vicino' },
+  ADOFLO: { precisione: 1, modo: 'su' },
+};
+
+// Arrotonda un valore ad un multiplo di `precisione`, per eccesso ('su') o al più vicino ('vicino').
+function arrotondaA(valore, precisione, modo) {
+  const unita = valore / precisione;
+  const unitaArrotondata = modo === 'su' ? Math.ceil(unita) : Math.round(unita);
+  return unitaArrotondata * precisione;
 }
-// L'acqua è il volume "di riempimento": arrotondata all'intero, come nell'esempio del brief.
-function fmtMlAcqua(v) {
-  return String(Math.round(v));
+
+// Calcola chimico+acqua già arrotondati secondo la regola del chimico specifico. L'acqua è
+// sempre il resto esatto (volumeTotale - chimicoArrotondato), così il totale versato nel tank
+// corrisponde sempre esattamente al volume di lavoro, senza scarti di arrotondamento.
+function calcolaMixArrotondato(nomeChimico, volumeTotaleMl, diluizioneN) {
+  const mix = calcolaMix(volumeTotaleMl, diluizioneN);
+  if (!mix) return null;
+  const regola = ARROTONDAMENTO_CHIMICO[nomeChimico] || { precisione: 0.1, modo: 'vicino' };
+  const chimicoMl = arrotondaA(mix.chimicoMl, regola.precisione, regola.modo);
+  const acquaMl = volumeTotaleMl - chimicoMl;
+  return { chimicoMl, acquaMl };
+}
+
+// Formatta un ml già arrotondato: intero se non ha decimali, altrimenti una sola cifra (es. "17.5").
+function fmtMl(v) {
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
 
 function fmtMMSS(totalSeconds) {
@@ -299,6 +351,8 @@ const state = {
 
   // Profilo di agitazione per lo sviluppo, scelto tra PROFILI_AGITAZIONE (Step 1).
   profiloAgitazione: PROFILO_AGITAZIONE_DEFAULT,
+  ricettaId: null, // riferimento a una voce di RICETTE[filmId]; null = selezione manuale/personalizzata
+  modalitaManuale: false, // se true, mostra i selettori separati di diluizione + profilo invece delle ricette
 
   // Temperatura del rivelatore misurata dall'utente (°C). Di default = temperatura di
   // riferimento dei tempi in TEMPI_SVILUPPO. Impostata/modificata nello Step 2.
@@ -394,6 +448,13 @@ function selezionaFilm(filmId) {
   state.configId = null;
   const configs = getConfigurazioniDisponibili();
   if (configs.length === 1) state.configId = configs[0].id; // auto-seleziona se unica opzione
+
+  // Auto-seleziona la ricetta predefinita per la pellicola scelta (o la prima disponibile),
+  // così normalmente basta scegliere la pellicola per avere già diluizione + agitazione pronte.
+  const ricette = RICETTE[filmId] || [];
+  const ricettaDefault = ricette.find(r => r.predefinita) || ricette[0] || null;
+  if (ricettaDefault) applicaRicetta(ricettaDefault.id);
+
   render();
 }
 
@@ -404,11 +465,34 @@ function selezionaConfig(configId) {
 
 function selezionaDiluizione(d) {
   state.diluizione = d;
+  state.ricettaId = null; // selezione manuale: non corrisponde più ad una ricetta con nome
   render();
 }
 
 function selezionaProfiloAgitazione(id) {
   state.profiloAgitazione = id;
+  state.ricettaId = null; // selezione manuale: non corrisponde più ad una ricetta con nome
+  render();
+}
+
+// Applica una ricetta (diluizione + profilo) senza chiamare render(): usata sia dal tap
+// diretto sulla card ricetta, sia dall'auto-selezione quando si cambia pellicola.
+function applicaRicetta(ricettaId) {
+  const ricette = RICETTE[state.filmId] || [];
+  const ricetta = ricette.find(r => r.id === ricettaId);
+  if (!ricetta) return;
+  state.ricettaId = ricetta.id;
+  state.diluizione = ricetta.diluizione;
+  state.profiloAgitazione = ricetta.profilo;
+}
+
+function selezionaRicetta(ricettaId) {
+  applicaRicetta(ricettaId);
+  render();
+}
+
+function toggleModalitaManuale() {
+  state.modalitaManuale = !state.modalitaManuale;
   render();
 }
 
@@ -503,6 +587,8 @@ function resetSessione() {
   state.configId = null;
   state.diluizione = null;
   state.profiloAgitazione = PROFILO_AGITAZIONE_DEFAULT;
+  state.ricettaId = null;
+  state.modalitaManuale = false;
   state.temperaturaRilevata = TEMPERATURA_RIFERIMENTO;
   state.fasi = [];
   state.faseIndex = 0;
@@ -887,6 +973,62 @@ function templateHeader(titolo, sottotitolo, mostraLogout) {
    12. RENDERING - STEP 1: CONFIGURAZIONE SESSIONE
    ===================================================================== */
 
+// Card di selezione ricetta: mostra le ricette pronte per la pellicola scelta (diluizione +
+// profilo di agitazione già abbinati). Se manca la pellicola non mostra nulla (sezione disabilitata).
+function templateSelezioneRicette() {
+  const ricette = RICETTE[state.filmId] || [];
+  if (ricette.length === 0) {
+    return `<p class="text-[11px] text-paperdim font-mono">Seleziona prima una pellicola.</p>`;
+  }
+  return `
+  <div class="space-y-2">
+    ${ricette.map(r => {
+      const profilo = PROFILI_AGITAZIONE[r.profilo];
+      const selezionata = state.ricettaId === r.id;
+      return `
+      <button onclick="selezionaRicetta('${r.id}')"
+        class="w-full text-left rounded-xl border px-4 py-3.5 transition-colors ${selezionata ? 'border-rodinal bg-rodinal/10' : 'border-camera-700 bg-camera-900'}">
+        <div class="flex items-center justify-between gap-2">
+          <p class="font-display text-sm text-paper">${r.nome}</p>
+          ${selezionata ? '<i data-lucide="check-circle-2" class="w-5 h-5 text-rodinal shrink-0"></i>' : ''}
+        </div>
+        <p class="text-[11px] text-paperdim font-mono mt-1">${profilo.descrizione}</p>
+      </button>
+      `;
+    }).join('')}
+  </div>`;
+}
+
+// Modalità manuale: i due selettori separati (diluizione + profilo) per chi vuole una
+// combinazione diversa da quelle pre-confezionate nelle ricette.
+function templateSelezioneManuale() {
+  return `
+  <div>
+    <p class="text-[11px] text-paperdim uppercase tracking-wide mb-2">Diluizione Rodinal</p>
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      ${['1+25', '1+50'].map(d => `
+        <button onclick="selezionaDiluizione('${d}')"
+          class="rounded-xl border py-4 font-mono text-lg transition-colors ${state.diluizione === d ? 'border-rodinal bg-rodinal/10 text-rodinal' : 'border-camera-700 bg-camera-900 text-paper'}">
+          ${d}
+        </button>
+      `).join('')}
+    </div>
+    <p class="text-[11px] text-paperdim uppercase tracking-wide mb-2">Schema di agitazione</p>
+    <div class="space-y-2">
+      ${Object.values(PROFILI_AGITAZIONE).map(p => `
+        <button onclick="selezionaProfiloAgitazione('${p.id}')"
+          class="w-full text-left rounded-xl border px-4 py-3.5 transition-colors ${state.profiloAgitazione === p.id ? 'border-rodinal bg-rodinal/10' : 'border-camera-700 bg-camera-900'}">
+          <div class="flex items-center justify-between gap-2">
+            <p class="font-display text-sm text-paper">${p.nome}</p>
+            ${state.profiloAgitazione === p.id ? '<i data-lucide="check-circle-2" class="w-5 h-5 text-rodinal shrink-0"></i>' : ''}
+          </div>
+          <p class="text-[11px] text-paperdim font-mono mt-1">${p.descrizione}</p>
+        </button>
+      `).join('')}
+    </div>
+  </div>`;
+}
+
 function templateStep1() {
   const filmsDisponibili = getFilmsDisponibili();
   const configs = getConfigurazioniDisponibili();
@@ -940,31 +1082,13 @@ function templateStep1() {
     </section>
 
     <section class="mb-7 ${!state.configId ? 'opacity-40 pointer-events-none' : ''}">
-      <h2 class="font-display text-xs uppercase tracking-widest text-paperdim mb-3">Diluizione Rodinal</h2>
-      <div class="grid grid-cols-2 gap-3">
-        ${['1+25', '1+50'].map(d => `
-          <button onclick="selezionaDiluizione('${d}')"
-            class="rounded-xl border py-4 font-mono text-lg transition-colors ${state.diluizione === d ? 'border-rodinal bg-rodinal/10 text-rodinal' : 'border-camera-700 bg-camera-900 text-paper'}">
-            ${d}
-          </button>
-        `).join('')}
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-display text-xs uppercase tracking-widest text-paperdim">Ricetta di sviluppo</h2>
+        <button onclick="toggleModalitaManuale()" class="text-[11px] font-mono text-paperdim underline underline-offset-2">
+          ${state.modalitaManuale ? 'Usa ricette' : 'Personalizza'}
+        </button>
       </div>
-    </section>
-
-    <section class="mb-7 ${!state.diluizione ? 'opacity-40 pointer-events-none' : ''}">
-      <h2 class="font-display text-xs uppercase tracking-widest text-paperdim mb-3">Schema di agitazione (sviluppo)</h2>
-      <div class="space-y-2">
-        ${Object.values(PROFILI_AGITAZIONE).map(p => `
-          <button onclick="selezionaProfiloAgitazione('${p.id}')"
-            class="w-full text-left rounded-xl border px-4 py-3.5 transition-colors ${state.profiloAgitazione === p.id ? 'border-rodinal bg-rodinal/10' : 'border-camera-700 bg-camera-900'}">
-            <div class="flex items-center justify-between gap-2">
-              <p class="font-display text-sm text-paper">${p.nome}</p>
-              ${state.profiloAgitazione === p.id ? '<i data-lucide="check-circle-2" class="w-5 h-5 text-rodinal shrink-0"></i>' : ''}
-            </div>
-            <p class="text-[11px] text-paperdim font-mono mt-1">${p.descrizione}</p>
-          </button>
-        `).join('')}
-      </div>
+      ${state.modalitaManuale ? templateSelezioneManuale() : templateSelezioneRicette()}
     </section>
 
     <div class="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-camera-950 via-camera-950 to-transparent pt-8 pb-6 px-5">
@@ -985,7 +1109,7 @@ function templateStep1() {
 
 function templateChemCard(nomeChimico, chimicoLabel, diluizioneN, volumeTotale, durataSec, schemaAgitazione, notaExtra) {
   const stile = STILE_CHIMICO[nomeChimico];
-  const mix = calcolaMix(volumeTotale, diluizioneN);
+  const mix = calcolaMixArrotondato(nomeChimico, volumeTotale, diluizioneN);
   const colore = stile.colore;
   const iconaSchema = schemaAgitazione.tipo === 'continua' ? 'refresh-ccw' : schemaAgitazione.tipo === 'ciclica' ? 'arrow-up-down' : 'minus';
   return `
@@ -1005,14 +1129,14 @@ function templateChemCard(nomeChimico, chimicoLabel, diluizioneN, volumeTotale, 
     <div class="grid grid-cols-2 gap-3">
       <div>
         <p class="text-[11px] text-paperdim uppercase tracking-wide mb-1">Acqua</p>
-        <p class="font-mono text-2xl text-paper">${fmtMlAcqua(mix.acquaMl)}<span class="text-sm text-paperdim ml-1">ml</span></p>
+        <p class="font-mono text-2xl text-paper">${fmtMl(mix.acquaMl)}<span class="text-sm text-paperdim ml-1">ml</span></p>
       </div>
       <div>
         <p class="text-[11px] text-paperdim uppercase tracking-wide mb-1">${nomeChimico}</p>
-        <p class="font-mono text-2xl text-${colore}">${fmtMlChimico(mix.chimicoMl)}<span class="text-sm text-paperdim ml-1">ml</span></p>
+        <p class="font-mono text-2xl text-${colore}">${fmtMl(mix.chimicoMl)}<span class="text-sm text-paperdim ml-1">ml</span></p>
       </div>
     </div>` : `
-    <p class="font-mono text-2xl text-paper">${fmtMlAcqua(volumeTotale)}<span class="text-sm text-paperdim ml-1">ml</span></p>
+    <p class="font-mono text-2xl text-paper">${fmtMl(volumeTotale)}<span class="text-sm text-paperdim ml-1">ml</span></p>
     `}
     <div class="flex items-center gap-1.5 mt-3 pt-3 border-t border-camera-700 text-paperdim text-[11px]">
       <i data-lucide="${iconaSchema}" class="w-3.5 h-3.5 shrink-0"></i>
