@@ -181,16 +181,49 @@ function calcolaTempoConTemperatura(tempoBaseSec, temperaturaMisurata) {
   return tempoBaseSec * Math.pow(COEFFICIENTE_TEMPERATURA, delta);
 }
 
-// Schemi di agitazione riutilizzabili, cronometrati sul tempo trascorso nella fase (elapsed):
-// - 'standard'  → 30s di agitazione continua iniziale, poi N inversioni cronometrate
-//                 all'inizio di ogni minuto successivo (regola richiesta nel brief originale).
-// - 'continua'  → agitazione continua per l'intera durata della fase (tipico per l'arresto,
-//                 fase breve dove si tiene il tank in movimento fino alla fine).
-// - 'nessuna'   → nessuna agitazione da segnalare (es. lavaggio con metodo a parte, imbibente
-//                 dove un'agitazione vigorosa crea solo schiuma indesiderata).
-const STANDARD_AGITAZIONE = { tipo: 'standard', continuaIniziale: 30, ogniSecondi: 60, inversioniPerCiclo: 2, durataBurst: 5 };
-const CONTINUA_AGITAZIONE = { tipo: 'continua' };
-const NESSUNA_AGITAZIONE = { tipo: 'nessuna' };
+// Schemi di agitazione riutilizzabili, cronometrati sul tempo trascorso nella fase (elapsed).
+// Due tipi "fissi":
+// - 'continua'  → agitazione continua per l'intera durata della fase (tipico per l'arresto).
+// - 'nessuna'   → nessuna agitazione da segnalare (lavaggio con metodo a parte, imbibente dove
+//                 un'agitazione vigorosa crea solo schiuma indesiderata).
+// E un tipo 'ciclica', usato dai tre PROFILI DI AGITAZIONE dello sviluppo (selezionabili
+// dall'utente nello Step 1): una fase iniziale + un ciclo che si ripete ogni N secondi.
+// Ogni fase (iniziale o di ciclo) può essere:
+//   azione:'continua'   → agita senza sosta per `durata` secondi
+//   azione:'inversioni' → esegui esattamente `numero` inversioni, scandite in `durata` secondi
+const CONTINUA_AGITAZIONE = { tipo: 'continua', descrizione: 'Agitazione continua per tutta la fase' };
+const NESSUNA_AGITAZIONE = { tipo: 'nessuna', descrizione: 'Nessuna agitazione necessaria' };
+
+// I tre profili di agitazione per lo sviluppo, selezionabili nello Step 1.
+// Coprono il metodo Ilford classico e le due varianti per Rodinal (normale e semi-stand).
+// MODIFICA QUI se vuoi tarare diversamente numero di inversioni, durate o periodicità.
+const PROFILI_AGITAZIONE = {
+  ilford: {
+    id: 'ilford',
+    nome: 'Ilford standard',
+    descrizione: '10 inversioni iniziali (10s) + 4 inversioni ogni minuto',
+    tipo: 'ciclica',
+    iniziale: { azione: 'inversioni', durata: 10, numero: 10 },
+    ripetizione: { ogni: 60, azione: 'inversioni', durata: 5, numero: 4 },
+  },
+  rodinal: {
+    id: 'rodinal',
+    nome: 'Rodinal normale',
+    descrizione: '30s di agitazione iniziale + 4 agitazioni nei primi 10s di ogni minuto restante',
+    tipo: 'ciclica',
+    iniziale: { azione: 'continua', durata: 30 },
+    ripetizione: { ogni: 60, azione: 'inversioni', durata: 10, numero: 4 },
+  },
+  semistand: {
+    id: 'semistand',
+    nome: 'Rodinal semi-stand',
+    descrizione: '30s iniziali + 3 inversioni ogni 3 minuti',
+    tipo: 'ciclica',
+    iniziale: { azione: 'continua', durata: 30 },
+    ripetizione: { ogni: 180, azione: 'inversioni', durata: 6, numero: 3 },
+  },
+};
+const PROFILO_AGITAZIONE_DEFAULT = 'rodinal'; // consigliato per Fomapan 200 + Rodinal 1+50
 
 // Fasi successive allo sviluppo: sempre uguali, indipendenti da pellicola/kit.
 // diluizioneN = "N" nel rapporto 1+N (1 parte chimico, N parti acqua).
@@ -198,8 +231,8 @@ const NESSUNA_AGITAZIONE = { tipo: 'nessuna' };
 const FASI_FISSE = [
   // Il bagno d'arresto è breve: si tiene il tank in agitazione continua fino alla fine — modifica qui se preferisci un altro schema.
   { key: 'arresto', nome: 'Arresto', chimico: 'ADOSTOP', durata: 60, diluizioneN: 19, schemaAgitazione: CONTINUA_AGITAZIONE },
-  // Per il fissaggio riuso lo schema standard (30s continua + 2 inversioni/min): assunzione ragionevole, modificabile qui.
-  { key: 'fissaggio', nome: 'Fissaggio', chimico: 'ADOFIX', durata: 300, diluizioneN: 4, schemaAgitazione: STANDARD_AGITAZIONE },
+  // Per il fissaggio riuso il profilo "Rodinal normale" (30s + 10s/min): assunzione ragionevole, modificabile qui.
+  { key: 'fissaggio', nome: 'Fissaggio', chimico: 'ADOFIX', durata: 300, diluizioneN: 4, schemaAgitazione: PROFILI_AGITAZIONE.rodinal },
   { key: 'lavaggio', nome: 'Lavaggio', chimico: 'ACQUA', durata: 600, diluizioneN: null, schemaAgitazione: NESSUNA_AGITAZIONE,
     nota: 'Imbando a cascata, oppure metodo Ilford: 1 inversione, cambio acqua + 5 inversioni, cambio acqua + 10 inversioni, cambio acqua + 20 inversioni.' },
   // N.B. diluizione Adoflo stimata (1+200): verifica la scheda tecnica del tuo lotto e modifica qui.
@@ -263,6 +296,9 @@ const state = {
   filmId: null,
   configId: null, // riferimento a configurazioni del kit
   diluizione: null, // '1+25' | '1+50'
+
+  // Profilo di agitazione per lo sviluppo, scelto tra PROFILI_AGITAZIONE (Step 1).
+  profiloAgitazione: PROFILO_AGITAZIONE_DEFAULT,
 
   // Temperatura del rivelatore misurata dall'utente (°C). Di default = temperatura di
   // riferimento dei tempi in TEMPI_SVILUPPO. Impostata/modificata nello Step 2.
@@ -371,6 +407,11 @@ function selezionaDiluizione(d) {
   render();
 }
 
+function selezionaProfiloAgitazione(id) {
+  state.profiloAgitazione = id;
+  render();
+}
+
 // Imposta la temperatura rilevata dall'utente e aggiorna solo l'anteprima del tempo
 // corretto (non richiama render(), altrimenti l'input perderebbe il focus mentre si digita).
 function impostaTemperatura(valoreStr) {
@@ -427,7 +468,7 @@ function vaiAStep3() {
       durata: tempoSviluppo,
       diluizioneN: state.diluizione === '1+25' ? 25 : 50,
       agitazioneSpeciale: true,
-      schemaAgitazione: STANDARD_AGITAZIONE,
+      schemaAgitazione: PROFILI_AGITAZIONE[state.profiloAgitazione],
     },
     ...FASI_FISSE,
   ];
@@ -461,6 +502,7 @@ function resetSessione() {
   state.filmId = null;
   state.configId = null;
   state.diluizione = null;
+  state.profiloAgitazione = PROFILO_AGITAZIONE_DEFAULT;
   state.temperaturaRilevata = TEMPERATURA_RIFERIMENTO;
   state.fasi = [];
   state.faseIndex = 0;
@@ -563,17 +605,20 @@ function statoAgitazione(fase, elapsed) {
 
   if (schema.tipo === 'continua') return { tipo: 'continua', attivo: true };
 
-  if (schema.tipo === 'standard') {
-    if (elapsed < schema.continuaIniziale) return { tipo: 'continua', attivo: true };
-    const posInCiclo = elapsed % schema.ogniSecondi;
-    if (posInCiclo < schema.durataBurst) {
-      const secPerInversione = schema.durataBurst / schema.inversioniPerCiclo;
-      const inversioneCorrente = Math.min(
-        schema.inversioniPerCiclo,
-        Math.floor(posInCiclo / secPerInversione) + 1
-      );
-      return { tipo: 'burst', attivo: true, inversioneCorrente, inversioniTotali: schema.inversioniPerCiclo };
-    }
+  if (schema.tipo === 'ciclica') {
+    // Sotto-funzione: valuta un singolo blocco (iniziale o di ripetizione), dato quanti
+    // secondi sono trascorsi ALL'INTERNO di quel blocco (non dell'intera fase).
+    const valutaBlocco = (blocco, secondiNelBlocco) => {
+      if (blocco.azione === 'continua') return { tipo: 'continua', attivo: true };
+      const secPerInversione = blocco.durata / blocco.numero;
+      const inversioneCorrente = Math.min(blocco.numero, Math.floor(secondiNelBlocco / secPerInversione) + 1);
+      return { tipo: 'burst', attivo: true, inversioneCorrente, inversioniTotali: blocco.numero };
+    };
+
+    if (elapsed < schema.iniziale.durata) return valutaBlocco(schema.iniziale, elapsed);
+
+    const posInCiclo = elapsed % schema.ripetizione.ogni;
+    if (posInCiclo < schema.ripetizione.durata) return valutaBlocco(schema.ripetizione, posInCiclo);
     return { tipo: 'riposo', attivo: false };
   }
 
@@ -584,12 +629,7 @@ function statoAgitazione(fase, elapsed) {
 // (usata sia nella scheda chimici dello Step 2, sia come sottotitolo nel timer dello Step 3).
 function descrizioneSchemaAgitazione(fase) {
   const schema = fase && fase.schemaAgitazione;
-  if (!schema || schema.tipo === 'nessuna') return 'Nessuna agitazione necessaria';
-  if (schema.tipo === 'continua') return 'Agitazione continua per tutta la fase';
-  if (schema.tipo === 'standard') {
-    return `0-${schema.continuaIniziale}s continua, poi ${schema.inversioniPerCiclo} inversioni all'inizio di ogni minuto`;
-  }
-  return '';
+  return schema && schema.descrizione ? schema.descrizione : '';
 }
 
 function startPauseTimer() {
@@ -911,6 +951,22 @@ function templateStep1() {
       </div>
     </section>
 
+    <section class="mb-7 ${!state.diluizione ? 'opacity-40 pointer-events-none' : ''}">
+      <h2 class="font-display text-xs uppercase tracking-widest text-paperdim mb-3">Schema di agitazione (sviluppo)</h2>
+      <div class="space-y-2">
+        ${Object.values(PROFILI_AGITAZIONE).map(p => `
+          <button onclick="selezionaProfiloAgitazione('${p.id}')"
+            class="w-full text-left rounded-xl border px-4 py-3.5 transition-colors ${state.profiloAgitazione === p.id ? 'border-rodinal bg-rodinal/10' : 'border-camera-700 bg-camera-900'}">
+            <div class="flex items-center justify-between gap-2">
+              <p class="font-display text-sm text-paper">${p.nome}</p>
+              ${state.profiloAgitazione === p.id ? '<i data-lucide="check-circle-2" class="w-5 h-5 text-rodinal shrink-0"></i>' : ''}
+            </div>
+            <p class="text-[11px] text-paperdim font-mono mt-1">${p.descrizione}</p>
+          </button>
+        `).join('')}
+      </div>
+    </section>
+
     <div class="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-camera-950 via-camera-950 to-transparent pt-8 pb-6 px-5">
       <div class="max-w-lg mx-auto">
         <button onclick="vaiAStep2()" ${!isStep1Valido() ? 'disabled' : ''}
@@ -931,7 +987,7 @@ function templateChemCard(nomeChimico, chimicoLabel, diluizioneN, volumeTotale, 
   const stile = STILE_CHIMICO[nomeChimico];
   const mix = calcolaMix(volumeTotale, diluizioneN);
   const colore = stile.colore;
-  const iconaSchema = schemaAgitazione.tipo === 'continua' ? 'refresh-ccw' : schemaAgitazione.tipo === 'standard' ? 'arrow-up-down' : 'minus';
+  const iconaSchema = schemaAgitazione.tipo === 'continua' ? 'refresh-ccw' : schemaAgitazione.tipo === 'ciclica' ? 'arrow-up-down' : 'minus';
   return `
   <div class="data-card rounded-2xl p-4 bg-camera-900 mb-3">
     <div class="flex items-center justify-between mb-3">
@@ -989,6 +1045,7 @@ function templateStep2() {
       <span class="text-paper">${film.nome}</span>
       <span class="text-rodinal">Rodinal ${state.diluizione}</span>
       <span>${volumeTotale} ml totali</span>
+      <span>&middot; ${PROFILI_AGITAZIONE[state.profiloAgitazione].nome}</span>
     </div>
 
     <div class="data-card rounded-2xl p-4 bg-camera-900 mb-3">
@@ -1021,7 +1078,7 @@ function templateStep2() {
       </div>
     </div>
 
-    ${templateChemCard('RODINAL', 'Rivelatore', rodinalN, volumeTotale, tempoSviluppoCorretto, STANDARD_AGITAZIONE, "Usa un cilindro graduato da 25 ml per il Rodinal: la quantita' e' ridotta.")}
+    ${templateChemCard('RODINAL', 'Rivelatore', rodinalN, volumeTotale, tempoSviluppoCorretto, PROFILI_AGITAZIONE[state.profiloAgitazione], "Usa un cilindro graduato da 25 ml per il Rodinal: la quantita' e' ridotta.")}
     ${templateChemCard('ADOSTOP', 'Arresto', 19, volumeTotale, faseArresto.durata, faseArresto.schemaAgitazione)}
     ${templateChemCard('ADOFIX', 'Fissaggio', 4, volumeTotale, faseFissaggio.durata, faseFissaggio.schemaAgitazione)}
     ${templateChemCard('ADOFLO', 'Imbibente', 200, volumeTotale, faseImbibente.durata, faseImbibente.schemaAgitazione, "Diluizione stimata: verifica la scheda tecnica del tuo lotto Adoflo.")}
@@ -1228,6 +1285,7 @@ render();
 // Hook di debug: permette di ispezionare lo stato corrente dalla console del browser
 // (es. window.__appState). Non usarlo per modificare lo stato: usa le funzioni sopra.
 window.__appState = state;
+window.__profiliAgitazione = PROFILI_AGITAZIONE; // solo per debug/test
 
 </script>
 </body>
