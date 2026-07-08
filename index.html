@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#14120D">
+<title>Camera Oscura PV · Sviluppo B/N</title>
+
+<!-- Font: Oswald per titoli/etichette (stile timbro su bobina), Inter per il corpo, IBM Plex Mono per dati e timer -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- Tailwind CSS via CDN (Play CDN, compilazione runtime) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          camera: {
+            950: '#14120D',
+            900: '#1C1912',
+            800: '#272219',
+            700: '#3D3626',
+            600: '#544A34',
+            500: '#6E644B',
+          },
+          paper: '#F1E9D6',
+          paperdim: '#B4A98C',
+          safelight: '#C1421F',
+          safelightdim: '#7A2A15',
+          rodinal: '#D89B3C',
+          stopbath: '#4C8C8A',
+          fixer: '#8C8FD0',
+          wetting: '#8FAE7E',
+        },
+        fontFamily: {
+          display: ['Oswald', 'sans-serif'],
+          body: ['Inter', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'monospace'],
+        },
+        keyframes: {
+          blinkfast: {
+            '0%, 100%': { opacity: 1 },
+            '50%': { opacity: 0.25 },
+          },
+          glow: {
+            '0%, 100%': { opacity: 0.55, transform: 'scale(0.96)' },
+            '50%': { opacity: 1, transform: 'scale(1.08)' },
+          },
+          ringpulse: {
+            '0%, 100%': { boxShadow: '0 0 0 0 rgba(193,66,31,0.55)' },
+            '50%': { boxShadow: '0 0 0 14px rgba(193,66,31,0)' },
+          },
+        },
+        animation: {
+          blinkfast: 'blinkfast 0.6s ease-in-out infinite',
+          glow: 'glow 1.7s ease-in-out infinite',
+          ringpulse: 'ringpulse 1.7s ease-in-out infinite',
+          'spin-slower': 'spin 2.4s linear infinite',
+        },
+      },
+    },
+  };
+</script>
+
+<!-- Lucide Icons -->
+<script src="https://unpkg.com/lucide@latest"></script>
+
+<style>
+  html, body { background-color: #14120D; }
+  body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+  .font-display { font-family: 'Oswald', sans-serif; }
+  .font-mono { font-family: 'IBM Plex Mono', monospace; }
+
+  /* Striscia perforata in stile bordo pellicola 35mm, usata come indicatore dei passaggi del wizard */
+  .sprocket-strip { position: relative; background: #272219; border-radius: 10px; overflow: hidden; }
+  .sprocket-strip::before, .sprocket-strip::after {
+    content: '';
+    position: absolute; left: 0; right: 0; height: 9px;
+    background-image: radial-gradient(circle, #14120D 3.1px, transparent 3.2px);
+    background-size: 22px 9px;
+    background-repeat: repeat-x;
+    background-position: 8px center;
+  }
+  .sprocket-strip::before { top: 0; }
+  .sprocket-strip::after { bottom: 0; }
+
+  /* Scrollbar discreta */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: #3D3626; border-radius: 3px; }
+
+  /* Card "scheda dati" con bordo tratteggiato in stile cartellino/etichetta da laboratorio */
+  .data-card { border: 1.5px dashed #3D3626; }
+
+  input[type="password"], input[type="text"] { -webkit-appearance: none; }
+
+  /* Anello di progresso timer */
+  .ring-track { stroke: #262626; }
+  .ring-progress { transition: stroke-dashoffset 1s linear; stroke-linecap: round; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-blinkfast, .animate-glow, .animate-ringpulse, .animate-spin-slower { animation: none; }
+  }
+</style>
+</head>
+<body class="bg-camera-950 text-paper font-body min-h-screen overflow-x-hidden">
+
+<div id="app" class="min-h-screen"></div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   1. CONFIGURAZIONE DATI — modifica qui pellicole, chimici, tempi, kit
+   ===================================================================== */
+
+// Password di accesso: cambiala qui quando vuoi ruotarla.
+// N.B. è una chiave "hardcoded" lato client: protegge da occhi indiscreti
+// occasionali, non è una vera autenticazione sicura (chiunque legga il
+// sorgente del file la vede in chiaro).
+const AUTH_PASSWORD = 'PeterVee2026!';
+const AUTH_STORAGE_KEY = 'darkroom_auth_v1';
+
+// Pellicole supportate
+const FILMS = [
+  { id: 'fp100', nome: 'Fomapan 100', formato: '120', iso: 100 },
+  { id: 'fp200', nome: 'Fomapan 200', formato: '35mm', iso: 200 },
+  { id: 'fp400', nome: 'Fomapan 400', formato: '35mm', iso: 400 },
+];
+
+// Kit hardware disponibili e relative configurazioni volume (in ml)
+const KITS = {
+  paterson: {
+    id: 'paterson',
+    nome: 'Paterson Universal',
+    sottotitolo: 'Tank a 2 spirali',
+    icon: 'cylinder',
+    configurazioni: [
+      { id: '1x35', label: '1 Pellicola 35mm', formato: '35mm', numPellicole: 1, volumeMl: 300 },
+      { id: '2x35', label: '2 Pellicole 35mm', formato: '35mm', numPellicole: 2, volumeMl: 600 },
+      { id: '1x120', label: '1 Pellicola 120', formato: '120', numPellicole: 1, volumeMl: 500 },
+    ],
+  },
+  lomo: {
+    id: 'lomo',
+    nome: 'Lomo Daylight Tank',
+    sottotitolo: 'Solo formato 35mm',
+    icon: 'sun',
+    configurazioni: [
+      { id: '1x35', label: '1 Pellicola 35mm', formato: '35mm', numPellicole: 1, volumeMl: 250 },
+    ],
+  },
+};
+
+// Tempi di sviluppo Rodinal in secondi, a 20°C — MODIFICA QUI per aggiornare i tempi
+const TEMPI_SVILUPPO = {
+  fp100: { '1+25': 5 * 60 + 30, '1+50': 9 * 60 },
+  fp200: { '1+25': 5 * 60 + 30, '1+50': 9 * 60 },
+  fp400: { '1+25': 6 * 60, '1+50': 11 * 60 },
+};
+
+// Schemi di agitazione riutilizzabili, cronometrati sul tempo trascorso nella fase (elapsed):
+// - 'standard'  → 30s di agitazione continua iniziale, poi N inversioni cronometrate
+//                 all'inizio di ogni minuto successivo (regola richiesta nel brief originale).
+// - 'continua'  → agitazione continua per l'intera durata della fase (tipico per l'arresto,
+//                 fase breve dove si tiene il tank in movimento fino alla fine).
+// - 'nessuna'   → nessuna agitazione da segnalare (es. lavaggio con metodo a parte, imbibente
+//                 dove un'agitazione vigorosa crea solo schiuma indesiderata).
+const STANDARD_AGITAZIONE = { tipo: 'standard', continuaIniziale: 30, ogniSecondi: 60, inversioniPerCiclo: 2, durataBurst: 5 };
+const CONTINUA_AGITAZIONE = { tipo: 'continua' };
+const NESSUNA_AGITAZIONE = { tipo: 'nessuna' };
+
+// Fasi successive allo sviluppo: sempre uguali, indipendenti da pellicola/kit.
+// diluizioneN = "N" nel rapporto 1+N (1 parte chimico, N parti acqua).
+// diluizioneN = null → nessuna miscela da preparare (solo acqua corrente/demineralizzata).
+const FASI_FISSE = [
+  // Il bagno d'arresto è breve: si tiene il tank in agitazione continua fino alla fine — modifica qui se preferisci un altro schema.
+  { key: 'arresto', nome: 'Arresto', chimico: 'ADOSTOP', durata: 60, diluizioneN: 19, schemaAgitazione: CONTINUA_AGITAZIONE },
+  // Per il fissaggio riuso lo schema standard (30s continua + 2 inversioni/min): assunzione ragionevole, modificabile qui.
+  { key: 'fissaggio', nome: 'Fissaggio', chimico: 'ADOFIX', durata: 300, diluizioneN: 4, schemaAgitazione: STANDARD_AGITAZIONE },
+  { key: 'lavaggio', nome: 'Lavaggio', chimico: 'ACQUA', durata: 600, diluizioneN: null, schemaAgitazione: NESSUNA_AGITAZIONE,
+    nota: 'Imbando a cascata, oppure metodo Ilford: 1 inversione, cambio acqua + 5 inversioni, cambio acqua + 10 inversioni, cambio acqua + 20 inversioni.' },
+  // N.B. diluizione Adoflo stimata (1+200): verifica la scheda tecnica del tuo lotto e modifica qui.
+  { key: 'imbibente', nome: 'Imbibente', chimico: 'ADOFLO', durata: 60, diluizioneN: 200, schemaAgitazione: NESSUNA_AGITAZIONE,
+    nota: 'In acqua demineralizzata. Un\'agitazione vigorosa crea solo schiuma: al massimo una singola immersione delicata.' },
+];
+
+// Colori/etichette per chimico, usati per badge e anello del timer
+const STILE_CHIMICO = {
+  RODINAL: { colore: 'rodinal', label: 'Rivelatore' },
+  ADOSTOP: { colore: 'stopbath', label: 'Arresto' },
+  ADOFIX: { colore: 'fixer', label: 'Fissaggio' },
+  ADOFLO: { colore: 'wetting', label: 'Imbibente' },
+  ACQUA: { colore: 'paperdim', label: 'Lavaggio' },
+};
+
+/* =====================================================================
+   2. UTILITY
+   ===================================================================== */
+
+// Calcola i ml di chimico e acqua dato il volume totale del tank e la diluizione 1+N
+function calcolaMix(volumeTotaleMl, diluizioneN) {
+  if (diluizioneN === null || diluizioneN === undefined) return null;
+  const chimico = volumeTotaleMl / (diluizioneN + 1);
+  const acqua = volumeTotaleMl - chimico;
+  return { chimicoMl: chimico, acquaMl: acqua };
+}
+
+// Il chimico va misurato con precisione (spesso pochi ml): 1 decimale.
+function fmtMlChimico(v) {
+  return (Math.round(v * 10) / 10).toString().replace(/\.0$/, '');
+}
+// L'acqua è il volume "di riempimento": arrotondata all'intero, come nell'esempio del brief.
+function fmtMlAcqua(v) {
+  return String(Math.round(v));
+}
+
+function fmtMMSS(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function refreshIcons() {
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function el(id) { return document.getElementById(id); }
+
+/* =====================================================================
+   3. STATO APPLICAZIONE
+   ===================================================================== */
+
+const state = {
+  schermata: 'login', // login | step1 | step2 | step3
+  authError: false,
+
+  // Selezioni step 1
+  kitId: null,
+  filmId: null,
+  configId: null, // riferimento a configurazioni del kit
+  diluizione: null, // '1+25' | '1+50'
+
+  // Timer step 3
+  fasi: [],
+  faseIndex: 0,
+  secondiRimasti: 0,
+  faseElapsed: 0,
+  timerAttivo: false,
+  timerIntervalId: null,
+  avanzamentoAutomatico: true,
+  inAttesaConferma: false,
+  ultimoMinutoBeepato: -1,
+  sessioneCompletata: false,
+  tempoTotaleSessione: 0,
+
+  audioCtx: null,
+  wakeLock: null,
+};
+
+/* =====================================================================
+   4. AUTENTICAZIONE
+   ===================================================================== */
+
+function checkAuthOnLoad() {
+  const token = localStorage.getItem(AUTH_STORAGE_KEY);
+  state.schermata = token === 'ok' ? 'step1' : 'login';
+}
+
+function tentaLogin(password) {
+  if (password === AUTH_PASSWORD) {
+    localStorage.setItem(AUTH_STORAGE_KEY, 'ok');
+    state.authError = false;
+    state.schermata = 'step1';
+    render();
+  } else {
+    state.authError = true;
+    render();
+  }
+}
+
+function logout() {
+  if (!confirm('Uscire e richiedere di nuovo la Access Key?')) return;
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  resetSessione();
+  state.schermata = 'login';
+  render();
+}
+
+/* =====================================================================
+   5. HELPERS DI DOMINIO (kit / pellicola / configurazioni)
+   ===================================================================== */
+
+function getKit() { return state.kitId ? KITS[state.kitId] : null; }
+
+function getFilmsDisponibili() {
+  const kit = getKit();
+  if (!kit) return FILMS;
+  const formatiKit = kit.configurazioni.map(c => c.formato);
+  return FILMS.filter(f => formatiKit.includes(f.formato));
+}
+
+function getFilm() { return FILMS.find(f => f.id === state.filmId) || null; }
+
+function getConfigurazioniDisponibili() {
+  const kit = getKit();
+  const film = getFilm();
+  if (!kit || !film) return [];
+  return kit.configurazioni.filter(c => c.formato === film.formato);
+}
+
+function getConfigurazioneSelezionata() {
+  const configs = getConfigurazioniDisponibili();
+  return configs.find(c => c.id === state.configId) || null;
+}
+
+function isStep1Valido() {
+  return !!(state.kitId && state.filmId && getConfigurazioneSelezionata() && state.diluizione);
+}
+
+function selezionaKit(kitId) {
+  state.kitId = kitId;
+  state.filmId = null;
+  state.configId = null;
+  render();
+}
+
+function selezionaFilm(filmId) {
+  state.filmId = filmId;
+  state.configId = null;
+  const configs = getConfigurazioniDisponibili();
+  if (configs.length === 1) state.configId = configs[0].id; // auto-seleziona se unica opzione
+  render();
+}
+
+function selezionaConfig(configId) {
+  state.configId = configId;
+  render();
+}
+
+function selezionaDiluizione(d) {
+  state.diluizione = d;
+  render();
+}
+
+/* =====================================================================
+   6. NAVIGAZIONE WIZARD
+   ===================================================================== */
+
+function vaiAStep2() {
+  if (!isStep1Valido()) return;
+  state.schermata = 'step2';
+  window.scrollTo(0, 0);
+  render();
+}
+
+function tornaAStep1() {
+  state.schermata = 'step1';
+  window.scrollTo(0, 0);
+  render();
+}
+
+function vaiAStep3() {
+  const config = getConfigurazioneSelezionata();
+  const film = getFilm();
+  const tempoSviluppo = TEMPI_SVILUPPO[film.id][state.diluizione];
+
+  state.fasi = [
+    {
+      key: 'sviluppo',
+      nome: 'Sviluppo',
+      chimico: 'RODINAL',
+      durata: tempoSviluppo,
+      diluizioneN: state.diluizione === '1+25' ? 25 : 50,
+      agitazioneSpeciale: true,
+      schemaAgitazione: STANDARD_AGITAZIONE,
+    },
+    ...FASI_FISSE,
+  ];
+  state.faseIndex = 0;
+  state.secondiRimasti = state.fasi[0].durata;
+  state.faseElapsed = 0;
+  state.timerAttivo = false;
+  state.inAttesaConferma = false;
+  state.ultimoMinutoBeepato = -1;
+  state.sessioneCompletata = false;
+  state.tempoTotaleSessione = 0;
+
+  state.schermata = 'step3';
+  window.scrollTo(0, 0);
+  richiediWakeLock();
+  render();
+}
+
+function nuovaSessione() {
+  if (state.timerAttivo && !confirm('Una sessione è in corso: vuoi davvero uscire e ricominciare?')) return;
+  resetSessione();
+  state.schermata = 'step1';
+  rilasciaWakeLock();
+  window.scrollTo(0, 0);
+  render();
+}
+
+function resetSessione() {
+  fermaIntervalloTimer();
+  state.kitId = null;
+  state.filmId = null;
+  state.configId = null;
+  state.diluizione = null;
+  state.fasi = [];
+  state.faseIndex = 0;
+  state.timerAttivo = false;
+  state.sessioneCompletata = false;
+}
+
+/* =====================================================================
+   7. AUDIO — beep generati via Web Audio API (nessun file esterno)
+   ===================================================================== */
+
+function getAudioCtx() {
+  if (!state.audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    state.audioCtx = new Ctx();
+  }
+  if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+  return state.audioCtx;
+}
+
+function beep(frequenza, durataMs, volume = 0.18) {
+  try {
+    const ctx = getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = frequenza;
+    gain.gain.value = volume;
+    osc.connect(gain).connect(ctx.destination);
+    const now = ctx.currentTime;
+    // breve fade-out per evitare "click" udibile a fine tono
+    gain.gain.setValueAtTime(volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + durataMs / 1000);
+    osc.start(now);
+    osc.stop(now + durataMs / 1000 + 0.02);
+  } catch (e) { /* audio non disponibile: nessun blocco funzionale */ }
+}
+
+// Beep corto: promemoria agitazione ogni minuto trascorso
+function beepMinuto() { beep(880, 160, 0.16); }
+// Beep di conto alla rovescia negli ultimi secondi prima del cambio fase
+function beepCountdown() { beep(660, 120, 0.14); }
+// Tono prolungato: inizio degli ultimi 5 secondi
+function beepAllarmeProlungato() { beep(520, 550, 0.2); }
+// Tono di cambio fase
+function beepCambioFase() { beep(1046, 380, 0.22); }
+
+/* =====================================================================
+   8. WAKE LOCK — evita che lo schermo si spenga durante il timer
+   ===================================================================== */
+
+async function richiediWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      state.wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { /* non supportato o negato: si procede comunque */ }
+}
+
+function rilasciaWakeLock() {
+  if (state.wakeLock) {
+    state.wakeLock.release().catch(() => {});
+    state.wakeLock = null;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.schermata === 'step3' && !state.sessioneCompletata) {
+    richiediWakeLock();
+  }
+});
+
+/* =====================================================================
+   9. LOGICA TIMER (step 3)
+   ===================================================================== */
+
+function faseCorrente() { return state.fasi[state.faseIndex]; }
+
+// Calcola lo stato di agitazione cronometrato per la fase corrente, in base al tempo
+// trascorso al suo interno (elapsed). Ritorna un oggetto descrittivo dello stato:
+//  { tipo:'nessuna' }                                          → niente da segnalare
+//  { tipo:'continua', attivo:true }                            → agita senza sosta
+//  { tipo:'burst', attivo:true, inversioneCorrente, inversioniTotali } → capovolgi ora (conteggiato)
+//  { tipo:'riposo', attivo:false }                              → ferma, lascia in posa
+function statoAgitazione(fase, elapsed) {
+  const schema = fase && fase.schemaAgitazione;
+  if (!schema || schema.tipo === 'nessuna') return { tipo: 'nessuna', attivo: false };
+
+  if (schema.tipo === 'continua') return { tipo: 'continua', attivo: true };
+
+  if (schema.tipo === 'standard') {
+    if (elapsed < schema.continuaIniziale) return { tipo: 'continua', attivo: true };
+    const posInCiclo = elapsed % schema.ogniSecondi;
+    if (posInCiclo < schema.durataBurst) {
+      const secPerInversione = schema.durataBurst / schema.inversioniPerCiclo;
+      const inversioneCorrente = Math.min(
+        schema.inversioniPerCiclo,
+        Math.floor(posInCiclo / secPerInversione) + 1
+      );
+      return { tipo: 'burst', attivo: true, inversioneCorrente, inversioniTotali: schema.inversioniPerCiclo };
+    }
+    return { tipo: 'riposo', attivo: false };
+  }
+
+  return { tipo: 'nessuna', attivo: false };
+}
+
+// Breve descrizione testuale dello schema di una fase, mostrata come promemoria statico
+// (usata sia nella scheda chimici dello Step 2, sia come sottotitolo nel timer dello Step 3).
+function descrizioneSchemaAgitazione(fase) {
+  const schema = fase && fase.schemaAgitazione;
+  if (!schema || schema.tipo === 'nessuna') return 'Nessuna agitazione necessaria';
+  if (schema.tipo === 'continua') return 'Agitazione continua per tutta la fase';
+  if (schema.tipo === 'standard') {
+    return `0-${schema.continuaIniziale}s continua, poi ${schema.inversioniPerCiclo} inversioni all'inizio di ogni minuto`;
+  }
+  return '';
+}
+
+function startPauseTimer() {
+  if (state.inAttesaConferma) { confermaProssimaFase(); return; }
+  if (state.timerAttivo) {
+    fermaIntervalloTimer();
+    state.timerAttivo = false;
+  } else {
+    getAudioCtx(); // sblocca l'audio al primo gesto utente
+    state.timerAttivo = true;
+    avviaIntervalloTimer();
+  }
+  render();
+}
+
+function avviaIntervalloTimer() {
+  fermaIntervalloTimer();
+  state.timerIntervalId = setInterval(tickTimer, 1000);
+}
+
+function fermaIntervalloTimer() {
+  if (state.timerIntervalId) {
+    clearInterval(state.timerIntervalId);
+    state.timerIntervalId = null;
+  }
+}
+
+function tickTimer() {
+  state.secondiRimasti -= 1;
+  state.faseElapsed += 1;
+  state.tempoTotaleSessione += 1;
+
+  // Beep corto ogni minuto trascorso (promemoria agitazione)
+  if (state.faseElapsed > 0 && state.faseElapsed % 60 === 0 && state.ultimoMinutoBeepato !== state.faseElapsed) {
+    state.ultimoMinutoBeepato = state.faseElapsed;
+    beepMinuto();
+  }
+
+  // Conto alla rovescia negli ultimi 5 secondi prima del cambio fase
+  if (state.secondiRimasti === 5) beepAllarmeProlungato();
+  else if (state.secondiRimasti > 0 && state.secondiRimasti < 5) beepCountdown();
+
+  if (state.secondiRimasti <= 0) {
+    fermaIntervalloTimer();
+    state.timerAttivo = false;
+    beepCambioFase();
+    gestisciFinePhase();
+    return;
+  }
+
+  aggiornaDOMTimer();
+}
+
+function gestisciFinePhase() {
+  const ultimaFase = state.faseIndex >= state.fasi.length - 1;
+  if (ultimaFase) {
+    state.sessioneCompletata = true;
+    rilasciaWakeLock();
+    render();
+    return;
+  }
+  if (state.avanzamentoAutomatico) {
+    passaAllaFaseSuccessiva();
+    // riparte subito in automatico: la mano è sporca, non deve toccare lo schermo
+    state.timerAttivo = true;
+    avviaIntervalloTimer();
+    render();
+  } else {
+    state.inAttesaConferma = true;
+    render();
+  }
+}
+
+function confermaProssimaFase() {
+  state.inAttesaConferma = false;
+  const ultimaFase = state.faseIndex >= state.fasi.length - 1;
+  if (ultimaFase) { state.sessioneCompletata = true; render(); return; }
+  passaAllaFaseSuccessiva();
+  state.timerAttivo = true;
+  avviaIntervalloTimer();
+  render();
+}
+
+function passaAllaFaseSuccessiva() {
+  state.faseIndex += 1;
+  const fase = faseCorrente();
+  state.secondiRimasti = fase.durata;
+  state.faseElapsed = 0;
+  state.ultimoMinutoBeepato = -1;
+}
+
+function saltaFase() {
+  if (!confirm('Saltare questa fase e passare alla successiva?')) return;
+  fermaIntervalloTimer();
+  state.timerAttivo = false;
+  const ultimaFase = state.faseIndex >= state.fasi.length - 1;
+  if (ultimaFase) {
+    state.sessioneCompletata = true;
+    rilasciaWakeLock();
+  } else {
+    passaAllaFaseSuccessiva();
+  }
+  render();
+}
+
+function toggleAvanzamentoAutomatico() {
+  state.avanzamentoAutomatico = !state.avanzamentoAutomatico;
+  render();
+}
+
+// Aggiornamento leggero ad ogni secondo: non ricostruisce tutto il DOM
+// (evita flicker e perdita del focus/listener sui bottoni)
+function aggiornaDOMTimer() {
+  const fase = faseCorrente();
+  const display = el('timer-display');
+  if (display) display.textContent = fmtMMSS(state.secondiRimasti);
+
+  const ring = el('timer-ring-progress');
+  if (ring) {
+    const r = 88;
+    const circ = 2 * Math.PI * r;
+    const frac = 1 - state.secondiRimasti / fase.durata;
+    ring.style.strokeDashoffset = String(circ * (1 - frac));
+  }
+
+  const agitaBox = el('agita-indicator');
+  if (agitaBox) {
+    agitaBox.innerHTML = templateIndicatoreAgitazione(fase);
+    refreshIcons();
+  }
+
+  const elapsedLabel = el('timer-elapsed-label');
+  if (elapsedLabel) elapsedLabel.textContent = fmtMMSS(state.faseElapsed) + ' trascorsi';
+}
+
+// Scorciatoia da tastiera: barra spaziatrice = Start/Pausa quando siamo nel timer
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && state.schermata === 'step3' && !state.sessioneCompletata) {
+    e.preventDefault();
+    startPauseTimer();
+  }
+});
+
+
+/* =====================================================================
+   10. RENDERING - LOGIN
+   ===================================================================== */
+
+function templateLogin() {
+  return `
+  <div class="min-h-screen flex flex-col items-center justify-center px-6 relative overflow-hidden">
+    <div class="absolute inset-0 pointer-events-none opacity-40" style="background: radial-gradient(circle at 50% 20%, #7A2A1533, transparent 60%);"></div>
+
+    <div class="relative w-full max-w-sm">
+      <div class="flex flex-col items-center mb-8">
+        <div class="w-16 h-16 rounded-full flex items-center justify-center mb-5 animate-ringpulse">
+          <div class="w-14 h-14 rounded-full border-2 border-safelight bg-safelight/10 flex items-center justify-center animate-glow">
+            <span class="font-display font-bold text-xl tracking-tight text-safelight">PV</span>
+          </div>
+        </div>
+        <h1 class="font-display uppercase tracking-[0.15em] text-2xl text-paper text-center">Camera Oscura PV</h1>
+        <p class="font-mono text-xs text-paperdim mt-2 tracking-wide text-center">ACCESSO RISERVATO A PIETRO VICENTI</p>
+      </div>
+
+      <form id="login-form" class="space-y-4">
+        <div>
+          <label class="block font-mono text-[11px] text-paperdim tracking-widest mb-2 uppercase">Access Key</label>
+          <input
+            id="password-input"
+            type="password"
+            autocomplete="off"
+            class="w-full bg-camera-900 border ${state.authError ? 'border-safelight' : 'border-camera-700'} rounded-xl px-4 py-3.5 text-paper font-mono text-lg tracking-widest focus:outline-none focus:border-rodinal transition-colors"
+            placeholder="********"
+          />
+        </div>
+        ${state.authError ? `
+        <p class="text-safelight text-sm font-body flex items-center gap-1.5">
+          <i data-lucide="alert-triangle" class="w-4 h-4"></i> Access Key errata. Riprova.
+        </p>` : ''}
+        <button type="submit" class="w-full bg-rodinal text-camera-950 font-display uppercase tracking-widest text-sm font-semibold rounded-xl py-4 active:scale-[0.98] transition-transform">
+          Entra
+        </button>
+      </form>
+    </div>
+  </div>`;
+}
+
+function afterRenderLogin() {
+  const form = el('login-form');
+  const input = el('password-input');
+  input.focus();
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    tentaLogin(input.value);
+  });
+}
+
+/* =====================================================================
+   11. RENDERING - COMPONENTI CONDIVISI
+   ===================================================================== */
+
+function templateFrameIndicator(stepAttivo) {
+  const frames = [
+    { n: 1, label: 'Sessione' },
+    { n: 2, label: 'Chimici' },
+    { n: 3, label: 'Sviluppo' },
+  ];
+  return `
+  <div class="sprocket-strip px-4 py-3.5 flex items-center justify-between mb-6">
+    ${frames.map((f, i) => {
+      const stato = f.n < stepAttivo ? 'done' : (f.n === stepAttivo ? 'active' : 'idle');
+      const circleClasses = stato === 'active'
+        ? 'bg-rodinal text-camera-950 border-rodinal'
+        : stato === 'done'
+          ? 'bg-camera-700 text-paper border-camera-600'
+          : 'bg-transparent text-paperdim border-camera-600';
+      return `
+      <div class="flex items-center gap-2 ${stato === 'idle' ? 'opacity-50' : ''}">
+        <div class="w-7 h-7 rounded-full border flex items-center justify-center font-mono text-xs font-semibold ${circleClasses}">
+          ${stato === 'done' ? '<i data-lucide="check" class="w-3.5 h-3.5"></i>' : f.n}
+        </div>
+        <span class="font-display text-[11px] uppercase tracking-wider ${stato === 'active' ? 'text-paper' : 'text-paperdim'} hidden sm:inline">${f.label}</span>
+      </div>
+      ${i < frames.length - 1 ? '<div class="flex-1 h-px bg-camera-600 mx-2"></div>' : ''}
+      `;
+    }).join('')}
+  </div>`;
+}
+
+function templateHeader(titolo, sottotitolo, mostraLogout) {
+  return `
+  <div class="flex items-start justify-between mb-5">
+    <div>
+      <h1 class="font-display uppercase tracking-wide text-xl text-paper">${titolo}</h1>
+      ${sottotitolo ? `<p class="text-paperdim text-sm mt-0.5">${sottotitolo}</p>` : ''}
+    </div>
+    ${mostraLogout ? `
+    <button onclick="logout()" class="w-9 h-9 rounded-full bg-camera-900 border border-camera-700 flex items-center justify-center text-paperdim active:scale-95 transition-transform shrink-0">
+      <i data-lucide="log-out" class="w-4 h-4"></i>
+    </button>` : ''}
+  </div>`;
+}
+
+/* =====================================================================
+   12. RENDERING - STEP 1: CONFIGURAZIONE SESSIONE
+   ===================================================================== */
+
+function templateStep1() {
+  const filmsDisponibili = getFilmsDisponibili();
+  const configs = getConfigurazioniDisponibili();
+
+  return `
+  <div class="max-w-lg mx-auto px-5 pt-6 pb-32">
+    ${templateFrameIndicator(1)}
+    ${templateHeader('Configura sessione', 'Kit, pellicola e diluizione', true)}
+
+    <section class="mb-7">
+      <h2 class="font-display text-xs uppercase tracking-widest text-paperdim mb-3">Kit di sviluppo</h2>
+      <div class="grid grid-cols-2 gap-3">
+        ${Object.values(KITS).map(kit => `
+          <button onclick="selezionaKit('${kit.id}')"
+            class="text-left rounded-2xl border p-4 transition-colors ${state.kitId === kit.id ? 'border-rodinal bg-rodinal/10' : 'border-camera-700 bg-camera-900'}">
+            <i data-lucide="${kit.icon}" class="w-5 h-5 mb-2 ${state.kitId === kit.id ? 'text-rodinal' : 'text-paperdim'}"></i>
+            <p class="font-display text-sm text-paper leading-tight">${kit.nome}</p>
+            <p class="text-[11px] text-paperdim mt-1">${kit.sottotitolo}</p>
+          </button>
+        `).join('')}
+      </div>
+    </section>
+
+    <section class="mb-7 ${!state.kitId ? 'opacity-40 pointer-events-none' : ''}">
+      <h2 class="font-display text-xs uppercase tracking-widest text-paperdim mb-3">Pellicola</h2>
+      <div class="space-y-2">
+        ${filmsDisponibili.map(f => `
+          <button onclick="selezionaFilm('${f.id}')"
+            class="w-full flex items-center justify-between rounded-xl border px-4 py-3.5 transition-colors ${state.filmId === f.id ? 'border-rodinal bg-rodinal/10' : 'border-camera-700 bg-camera-900'}">
+            <div class="text-left">
+              <p class="font-display text-sm text-paper">${f.nome}</p>
+              <p class="text-[11px] text-paperdim font-mono mt-0.5">ISO ${f.iso} - Formato ${f.formato}</p>
+            </div>
+            ${state.filmId === f.id ? '<i data-lucide="check-circle-2" class="w-5 h-5 text-rodinal shrink-0"></i>' : ''}
+          </button>
+        `).join('')}
+      </div>
+    </section>
+
+    <section class="mb-7 ${!state.filmId ? 'opacity-40 pointer-events-none' : ''}">
+      <h2 class="font-display text-xs uppercase tracking-widest text-paperdim mb-3">Formato &amp; quantita'</h2>
+      <div class="grid ${configs.length > 1 ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
+        ${configs.map(c => `
+          <button onclick="selezionaConfig('${c.id}')"
+            class="rounded-xl border px-3 py-3 transition-colors ${state.configId === c.id ? 'border-rodinal bg-rodinal/10' : 'border-camera-700 bg-camera-900'}">
+            <p class="font-mono text-sm text-paper">${c.label}</p>
+            <p class="text-[11px] text-paperdim mt-0.5">${c.volumeMl} ml totali</p>
+          </button>
+        `).join('')}
+      </div>
+    </section>
+
+    <section class="mb-7 ${!state.configId ? 'opacity-40 pointer-events-none' : ''}">
+      <h2 class="font-display text-xs uppercase tracking-widest text-paperdim mb-3">Diluizione Rodinal</h2>
+      <div class="grid grid-cols-2 gap-3">
+        ${['1+25', '1+50'].map(d => `
+          <button onclick="selezionaDiluizione('${d}')"
+            class="rounded-xl border py-4 font-mono text-lg transition-colors ${state.diluizione === d ? 'border-rodinal bg-rodinal/10 text-rodinal' : 'border-camera-700 bg-camera-900 text-paper'}">
+            ${d}
+          </button>
+        `).join('')}
+      </div>
+    </section>
+
+    <div class="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-camera-950 via-camera-950 to-transparent pt-8 pb-6 px-5">
+      <div class="max-w-lg mx-auto">
+        <button onclick="vaiAStep2()" ${!isStep1Valido() ? 'disabled' : ''}
+          class="w-full font-display uppercase tracking-widest text-sm font-semibold rounded-xl py-4 flex items-center justify-center gap-2 transition-all
+          ${isStep1Valido() ? 'bg-rodinal text-camera-950 active:scale-[0.98]' : 'bg-camera-800 text-paperdim cursor-not-allowed'}">
+          Prepara i chimici <i data-lucide="arrow-right" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* =====================================================================
+   13. RENDERING - STEP 2: SCHEDA PREPARAZIONE CHIMICI
+   ===================================================================== */
+
+function templateChemCard(nomeChimico, chimicoLabel, diluizioneN, volumeTotale, durataSec, schemaAgitazione, notaExtra) {
+  const stile = STILE_CHIMICO[nomeChimico];
+  const mix = calcolaMix(volumeTotale, diluizioneN);
+  const colore = stile.colore;
+  const iconaSchema = schemaAgitazione.tipo === 'continua' ? 'refresh-ccw' : schemaAgitazione.tipo === 'standard' ? 'arrow-up-down' : 'minus';
+  return `
+  <div class="data-card rounded-2xl p-4 bg-camera-900 mb-3">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-${colore}"></span>
+        <p class="font-display text-sm uppercase tracking-wide text-paper">${nomeChimico}</p>
+        <span class="text-[11px] text-paperdim">- ${chimicoLabel}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        ${diluizioneN ? `<span class="font-mono text-xs text-${colore}">1+${diluizioneN}</span>` : ''}
+        <span class="font-mono text-xs text-paper bg-camera-800 rounded-full px-2 py-0.5">${fmtMMSS(durataSec)}</span>
+      </div>
+    </div>
+    ${mix ? `
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <p class="text-[11px] text-paperdim uppercase tracking-wide mb-1">Acqua</p>
+        <p class="font-mono text-2xl text-paper">${fmtMlAcqua(mix.acquaMl)}<span class="text-sm text-paperdim ml-1">ml</span></p>
+      </div>
+      <div>
+        <p class="text-[11px] text-paperdim uppercase tracking-wide mb-1">${nomeChimico}</p>
+        <p class="font-mono text-2xl text-${colore}">${fmtMlChimico(mix.chimicoMl)}<span class="text-sm text-paperdim ml-1">ml</span></p>
+      </div>
+    </div>` : `
+    <p class="font-mono text-2xl text-paper">${fmtMlAcqua(volumeTotale)}<span class="text-sm text-paperdim ml-1">ml</span></p>
+    `}
+    <div class="flex items-center gap-1.5 mt-3 pt-3 border-t border-camera-700 text-paperdim text-[11px]">
+      <i data-lucide="${iconaSchema}" class="w-3.5 h-3.5 shrink-0"></i>
+      <span>${descrizioneSchemaAgitazione({ schemaAgitazione })}</span>
+    </div>
+    ${notaExtra ? `<p class="text-[11px] text-paperdim mt-2 leading-relaxed flex gap-1.5"><i data-lucide="info" class="w-3.5 h-3.5 shrink-0 mt-0.5"></i>${notaExtra}</p>` : ''}
+  </div>`;
+}
+
+function templateStep2() {
+  const kit = getKit();
+  const film = getFilm();
+  const config = getConfigurazioneSelezionata();
+  const volumeTotale = config.volumeMl;
+  const rodinalN = state.diluizione === '1+25' ? 25 : 50;
+  const tempoSviluppo = TEMPI_SVILUPPO[film.id][state.diluizione];
+  const faseArresto = FASI_FISSE.find(f => f.key === 'arresto');
+  const faseFissaggio = FASI_FISSE.find(f => f.key === 'fissaggio');
+  const faseImbibente = FASI_FISSE.find(f => f.key === 'imbibente');
+
+  return `
+  <div class="max-w-lg mx-auto px-5 pt-6 pb-32">
+    ${templateFrameIndicator(2)}
+    ${templateHeader('Scheda chimici', 'Misura con precisione prima di iniziare', true)}
+
+    <div class="rounded-2xl bg-camera-900/60 border border-camera-700 px-4 py-3 mb-6 flex flex-wrap gap-x-2 gap-y-1 font-mono text-xs text-paperdim">
+      <span class="text-paper">${kit.nome}</span>
+      <span>${config.label}</span>
+      <span class="text-paper">${film.nome}</span>
+      <span class="text-rodinal">Rodinal ${state.diluizione}</span>
+      <span>${volumeTotale} ml totali</span>
+    </div>
+
+    ${templateChemCard('RODINAL', 'Rivelatore', rodinalN, volumeTotale, tempoSviluppo, STANDARD_AGITAZIONE, "Usa un cilindro graduato da 25 ml per il Rodinal: la quantita' e' ridotta.")}
+    ${templateChemCard('ADOSTOP', 'Arresto', 19, volumeTotale, faseArresto.durata, faseArresto.schemaAgitazione)}
+    ${templateChemCard('ADOFIX', 'Fissaggio', 4, volumeTotale, faseFissaggio.durata, faseFissaggio.schemaAgitazione)}
+    ${templateChemCard('ADOFLO', 'Imbibente', 200, volumeTotale, faseImbibente.durata, faseImbibente.schemaAgitazione, "Diluizione stimata: verifica la scheda tecnica del tuo lotto Adoflo.")}
+
+    <div class="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-camera-950 via-camera-950 to-transparent pt-8 pb-6 px-5">
+      <div class="max-w-lg mx-auto flex gap-3">
+        <button onclick="tornaAStep1()" class="w-14 shrink-0 rounded-xl border border-camera-700 bg-camera-900 flex items-center justify-center active:scale-95 transition-transform">
+          <i data-lucide="arrow-left" class="w-5 h-5 text-paperdim"></i>
+        </button>
+        <button onclick="vaiAStep3()" class="flex-1 bg-rodinal text-camera-950 font-display uppercase tracking-widest text-sm font-semibold rounded-xl py-4 flex items-center justify-center gap-2 active:scale-[0.98] transition-transform">
+          Tutto pronto, vai allo sviluppo <i data-lucide="timer" class="w-4 h-4"></i>
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* =====================================================================
+   14. RENDERING - STEP 3: TIMER INTERATTIVO (CAMERA OSCURA)
+   ===================================================================== */
+
+const ICONA_FASE = {
+  sviluppo: 'droplet',
+  arresto: 'octagon-x',
+  fissaggio: 'lock',
+  lavaggio: 'waves',
+  imbibente: 'sparkles',
+};
+
+// Indicatore icona dell'agitazione, ricalcolato ad ogni secondo (vedi aggiornaDOMTimer).
+// Tre stati visivi distinti, come richiesto: agita in continuo, capovolgi ora (con conteggio
+// delle inversioni), oppure fermati e lascia in posa.
+function templateIndicatoreAgitazione(fase) {
+  const stato = statoAgitazione(fase, state.faseElapsed);
+
+  if (stato.tipo === 'nessuna') {
+    return `
+    <div class="flex items-center gap-2 text-neutral-500 font-mono text-[11px] uppercase tracking-widest">
+      <i data-lucide="minus" class="w-3.5 h-3.5"></i> Nessuna agitazione
+    </div>`;
+  }
+
+  if (stato.tipo === 'continua') {
+    return `
+    <div class="flex items-center gap-2 bg-yellow-300 text-black font-display uppercase tracking-widest text-sm font-bold px-5 py-2.5 rounded-full">
+      <i data-lucide="refresh-ccw" class="w-4 h-4 animate-spin-slower"></i> Agita senza sosta
+    </div>`;
+  }
+
+  if (stato.tipo === 'burst') {
+    return `
+    <div class="flex items-center gap-2 bg-yellow-300 text-black font-display uppercase tracking-widest text-sm font-bold px-5 py-2.5 rounded-full animate-blinkfast">
+      <i data-lucide="arrow-up-down" class="w-4 h-4"></i> Capovolgi &middot; ${stato.inversioneCorrente}/${stato.inversioniTotali}
+    </div>`;
+  }
+
+  // riposo: la fase prevede agitazione periodica, ma ora è il momento di fermarsi
+  return `
+  <div class="flex items-center gap-2 bg-neutral-800 text-neutral-400 font-display uppercase tracking-widest text-sm font-semibold px-5 py-2.5 rounded-full">
+    <i data-lucide="pause" class="w-4 h-4"></i> Ferma &middot; lascia in posa
+  </div>`;
+}
+
+function templateFaseStrip() {
+  return `
+  <div class="flex items-center justify-center gap-2 mt-8">
+    ${state.fasi.map((f, i) => {
+      const stato = i < state.faseIndex ? 'done' : (i === state.faseIndex ? 'active' : 'idle');
+      return `
+      <div class="flex flex-col items-center gap-1.5">
+        <div class="w-9 h-9 rounded-full border flex items-center justify-center
+          ${stato === 'active' ? 'border-yellow-300 bg-yellow-300/10' : stato === 'done' ? 'border-neutral-600 bg-neutral-800' : 'border-neutral-800'}">
+          <i data-lucide="${stato === 'done' ? 'check' : ICONA_FASE[f.key]}" class="w-4 h-4 ${stato === 'active' ? 'text-yellow-300' : stato === 'done' ? 'text-neutral-400' : 'text-neutral-700'}"></i>
+        </div>
+      </div>
+      `;
+    }).join('')}
+  </div>`;
+}
+
+function templateStep3() {
+  if (state.sessioneCompletata) return templateCompletamento();
+
+  const fase = faseCorrente();
+  const r = 88;
+  const circ = 2 * Math.PI * r;
+  const frac = 1 - state.secondiRimasti / fase.durata;
+  const dashoffset = circ * (1 - frac);
+  const stile = STILE_CHIMICO[fase.chimico];
+
+  return `
+  <div class="min-h-screen bg-black text-white flex flex-col px-5 pt-6 pb-8">
+
+    <div class="flex items-center justify-between mb-2">
+      <button onclick="nuovaSessione()" class="w-9 h-9 rounded-full bg-neutral-900 flex items-center justify-center text-neutral-400 active:scale-95 transition-transform">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+      <button onclick="toggleAvanzamentoAutomatico()" class="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-neutral-400 bg-neutral-900 rounded-full px-3 py-2">
+        <span class="w-2 h-2 rounded-full ${state.avanzamentoAutomatico ? 'bg-yellow-300' : 'bg-neutral-600'}"></span>
+        Auto
+      </button>
+    </div>
+
+    <div class="flex-1 flex flex-col items-center justify-center">
+      <p class="font-display uppercase tracking-[0.2em] text-sm text-neutral-400 mb-1">Fase ${state.faseIndex + 1} di ${state.fasi.length}</p>
+      <h1 class="font-display uppercase tracking-wide text-3xl text-white mb-1">${fase.nome}</h1>
+      <p class="font-mono text-xs tracking-widest text-${stile.colore} mb-1">${fase.chimico}${fase.diluizioneN ? ` &middot; 1+${fase.diluizioneN}` : ''}</p>
+      <p class="font-mono text-[10px] tracking-wide text-neutral-500 mb-8">${descrizioneSchemaAgitazione(fase)}</p>
+
+      <div class="relative w-64 h-64 flex items-center justify-center">
+        <svg viewBox="0 0 200 200" class="w-full h-full -rotate-90">
+          <circle cx="100" cy="100" r="${r}" fill="none" stroke="#262626" stroke-width="8"></circle>
+          <circle id="timer-ring-progress" cx="100" cy="100" r="${r}" fill="none" stroke="#C1421F" stroke-width="8"
+            stroke-dasharray="${circ}" stroke-dashoffset="${dashoffset}" class="ring-progress"></circle>
+        </svg>
+        <div class="absolute flex flex-col items-center">
+          <span id="timer-display" class="font-mono text-6xl font-semibold text-yellow-300 tabular-nums">${fmtMMSS(state.secondiRimasti)}</span>
+          <span id="timer-elapsed-label" class="font-mono text-xs text-neutral-500 mt-2">${fmtMMSS(state.faseElapsed)} trascorsi</span>
+        </div>
+      </div>
+
+      <div id="agita-indicator" class="mt-8">
+        ${templateIndicatoreAgitazione(fase)}
+      </div>
+
+      ${fase.nota ? `<p class="text-neutral-400 text-xs text-center max-w-xs mt-6 leading-relaxed">${fase.nota}</p>` : ''}
+    </div>
+
+    ${state.inAttesaConferma ? `
+    <div class="mb-4 text-center">
+      <p class="font-display uppercase tracking-wide text-yellow-300 text-sm mb-3">Fase completata</p>
+      <button onclick="confermaProssimaFase()" class="w-full bg-yellow-300 text-black font-display uppercase tracking-widest text-sm font-bold rounded-2xl py-5 active:scale-[0.98] transition-transform">
+        Conferma e continua
+      </button>
+    </div>
+    ` : `
+    <div class="flex items-center gap-3">
+      <button onclick="startPauseTimer()" class="flex-1 font-display uppercase tracking-widest text-base font-bold rounded-2xl py-5 flex items-center justify-center gap-2 active:scale-[0.98] transition-transform
+        ${state.timerAttivo ? 'bg-neutral-800 text-white' : 'bg-yellow-300 text-black'}">
+        <i data-lucide="${state.timerAttivo ? 'pause' : 'play'}" class="w-5 h-5"></i>
+        ${state.timerAttivo ? 'Pausa' : 'Avvia'}
+      </button>
+      <button onclick="saltaFase()" class="w-16 rounded-2xl bg-neutral-900 flex items-center justify-center text-neutral-400 active:scale-95 transition-transform">
+        <i data-lucide="skip-forward" class="w-5 h-5"></i>
+      </button>
+    </div>
+    `}
+
+    ${templateFaseStrip()}
+  </div>`;
+}
+
+function templateCompletamento() {
+  const film = getFilm();
+  return `
+  <div class="min-h-screen bg-black text-white flex flex-col items-center justify-center px-6 text-center">
+    <div class="w-20 h-20 rounded-full bg-yellow-300/10 border border-yellow-300 flex items-center justify-center mb-6">
+      <i data-lucide="check" class="w-9 h-9 text-yellow-300"></i>
+    </div>
+    <h1 class="font-display uppercase tracking-wide text-2xl mb-2">Sviluppo completato</h1>
+    <p class="text-neutral-400 text-sm mb-1">${film ? film.nome : ''} &middot; Rodinal ${state.diluizione}</p>
+    <p class="font-mono text-xs text-neutral-500 mb-10">Tempo totale sessione: ${fmtMMSS(state.tempoTotaleSessione)}</p>
+    <button onclick="nuovaSessione()" class="w-full max-w-xs bg-yellow-300 text-black font-display uppercase tracking-widest text-sm font-bold rounded-2xl py-4 active:scale-[0.98] transition-transform">
+      Nuova sessione
+    </button>
+  </div>`;
+}
+
+/* =====================================================================
+   15. RENDER MASTER + INIT
+   ===================================================================== */
+
+function render() {
+  const app = el('app');
+  switch (state.schermata) {
+    case 'login':
+      app.innerHTML = templateLogin();
+      refreshIcons();
+      afterRenderLogin();
+      break;
+    case 'step1':
+      app.innerHTML = templateStep1();
+      refreshIcons();
+      break;
+    case 'step2':
+      app.innerHTML = templateStep2();
+      refreshIcons();
+      break;
+    case 'step3':
+      app.innerHTML = templateStep3();
+      refreshIcons();
+      break;
+  }
+}
+
+checkAuthOnLoad();
+render();
+
+// Hook di debug: permette di ispezionare lo stato corrente dalla console del browser
+// (es. window.__appState). Non usarlo per modificare lo stato: usa le funzioni sopra.
+window.__appState = state;
+
+</script>
+</body>
+</html>
