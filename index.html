@@ -163,6 +163,24 @@ const TEMPI_SVILUPPO = {
   fp400: { '1+25': 6 * 60, '1+50': 11 * 60 },
 };
 
+// Temperatura di riferimento a cui sono validi i tempi in TEMPI_SVILUPPO.
+const TEMPERATURA_RIFERIMENTO = 20;
+
+// Coefficiente di correzione tempo/temperatura: quanto cambia il tempo di sviluppo per
+// ogni grado Celsius di scostamento dalla temperatura di riferimento. 1.12 = 12% per °C,
+// un valore tipico usato nelle tabelle tempo/temperatura per sviluppo B/N (es. Kodak D-76):
+// più freddo → serve più tempo, più caldo → serve meno tempo. Se hai dati più precisi per il
+// tuo Rodinal, modifica questo valore.
+const COEFFICIENTE_TEMPERATURA = 1.12;
+
+// Corregge un tempo di sviluppo (in secondi, valido a TEMPERATURA_RIFERIMENTO) in base alla
+// temperatura realmente misurata. Formula esponenziale standard: ogni grado di differenza
+// moltiplica il tempo per COEFFICIENTE_TEMPERATURA (in più o in meno a seconda del segno).
+function calcolaTempoConTemperatura(tempoBaseSec, temperaturaMisurata) {
+  const delta = TEMPERATURA_RIFERIMENTO - temperaturaMisurata;
+  return tempoBaseSec * Math.pow(COEFFICIENTE_TEMPERATURA, delta);
+}
+
 // Schemi di agitazione riutilizzabili, cronometrati sul tempo trascorso nella fase (elapsed):
 // - 'standard'  → 30s di agitazione continua iniziale, poi N inversioni cronometrate
 //                 all'inizio di ogni minuto successivo (regola richiesta nel brief originale).
@@ -246,6 +264,10 @@ const state = {
   configId: null, // riferimento a configurazioni del kit
   diluizione: null, // '1+25' | '1+50'
 
+  // Temperatura del rivelatore misurata dall'utente (°C). Di default = temperatura di
+  // riferimento dei tempi in TEMPI_SVILUPPO. Impostata/modificata nello Step 2.
+  temperaturaRilevata: 20,
+
   // Timer step 3
   fasi: [],
   faseIndex: 0,
@@ -254,6 +276,7 @@ const state = {
   timerAttivo: false,
   timerIntervalId: null,
   avanzamentoAutomatico: true,
+  suonoAgitazioneAttivo: true, // clic a ritmo di secondo durante le fasi con schema di agitazione
   inAttesaConferma: false,
   ultimoMinutoBeepato: -1,
   sessioneCompletata: false,
@@ -348,6 +371,31 @@ function selezionaDiluizione(d) {
   render();
 }
 
+// Imposta la temperatura rilevata dall'utente e aggiorna solo l'anteprima del tempo
+// corretto (non richiama render(), altrimenti l'input perderebbe il focus mentre si digita).
+function impostaTemperatura(valoreStr) {
+  const v = parseFloat(valoreStr);
+  if (!isNaN(v)) state.temperaturaRilevata = v;
+  aggiornaAnteprimaTemperatura();
+}
+
+function aggiornaAnteprimaTemperatura() {
+  const film = getFilm();
+  if (!film || !state.diluizione) return;
+  const base = TEMPI_SVILUPPO[film.id][state.diluizione];
+  const corretto = calcolaTempoConTemperatura(base, state.temperaturaRilevata);
+
+  const tempoEl = el('tempo-sviluppo-corretto');
+  if (tempoEl) tempoEl.textContent = fmtMMSS(corretto);
+
+  const notaEl = el('tempo-sviluppo-nota');
+  if (notaEl) {
+    notaEl.textContent = Math.round(corretto) === base
+      ? `Uguale al tempo base (${fmtMMSS(base)} a ${TEMPERATURA_RIFERIMENTO}°C)`
+      : `Base ${fmtMMSS(base)} a ${TEMPERATURA_RIFERIMENTO}°C · corretto per ${state.temperaturaRilevata}°C`;
+  }
+}
+
 /* =====================================================================
    6. NAVIGAZIONE WIZARD
    ===================================================================== */
@@ -368,7 +416,8 @@ function tornaAStep1() {
 function vaiAStep3() {
   const config = getConfigurazioneSelezionata();
   const film = getFilm();
-  const tempoSviluppo = TEMPI_SVILUPPO[film.id][state.diluizione];
+  const tempoSviluppoBase = TEMPI_SVILUPPO[film.id][state.diluizione];
+  const tempoSviluppo = Math.round(calcolaTempoConTemperatura(tempoSviluppoBase, state.temperaturaRilevata));
 
   state.fasi = [
     {
@@ -412,6 +461,7 @@ function resetSessione() {
   state.filmId = null;
   state.configId = null;
   state.diluizione = null;
+  state.temperaturaRilevata = TEMPERATURA_RIFERIMENTO;
   state.fasi = [];
   state.faseIndex = 0;
   state.timerAttivo = false;
@@ -449,7 +499,8 @@ function beep(frequenza, durataMs, volume = 0.18) {
   } catch (e) { /* audio non disponibile: nessun blocco funzionale */ }
 }
 
-// Beep corto: promemoria agitazione ogni minuto trascorso
+// Beep corto: promemoria agitazione ogni minuto trascorso (solo per fasi senza schema di
+// agitazione dedicato: per quelle il ritmo lo danno già i tick muovi/fermo qui sotto).
 function beepMinuto() { beep(880, 160, 0.16); }
 // Beep di conto alla rovescia negli ultimi secondi prima del cambio fase
 function beepCountdown() { beep(660, 120, 0.14); }
@@ -457,6 +508,17 @@ function beepCountdown() { beep(660, 120, 0.14); }
 function beepAllarmeProlungato() { beep(520, 550, 0.2); }
 // Tono di cambio fase
 function beepCambioFase() { beep(1046, 380, 0.22); }
+
+// Clic a ritmo di secondo durante le fasi con schema di agitazione, per seguire il tempo
+// ad orecchio senza dover guardare lo schermo. Due timbri chiaramente distinti:
+// acuto e breve = "muovi ora", grave e più sordo = "fermo, lascia in posa".
+function tickMuovi() { beep(760, 55, 0.07); }
+function tickFermo() { beep(220, 55, 0.05); }
+
+function toggleSuonoAgitazione() {
+  state.suonoAgitazioneAttivo = !state.suonoAgitazioneAttivo;
+  render();
+}
 
 /* =====================================================================
    8. WAKE LOCK — evita che lo schermo si spenga durante il timer
@@ -560,8 +622,18 @@ function tickTimer() {
   state.faseElapsed += 1;
   state.tempoTotaleSessione += 1;
 
-  // Beep corto ogni minuto trascorso (promemoria agitazione)
-  if (state.faseElapsed > 0 && state.faseElapsed % 60 === 0 && state.ultimoMinutoBeepato !== state.faseElapsed) {
+  const fase = faseCorrente();
+  const schema = fase && fase.schemaAgitazione;
+
+  if (schema && schema.tipo !== 'nessuna') {
+    // Fasi con schema di agitazione: un clic ad ogni secondo, con timbro diverso
+    // a seconda che sia il momento di muovere il tank o di lasciarlo fermo.
+    if (state.suonoAgitazioneAttivo) {
+      const stato = statoAgitazione(fase, state.faseElapsed);
+      if (stato.attivo) tickMuovi(); else tickFermo();
+    }
+  } else if (state.faseElapsed > 0 && state.faseElapsed % 60 === 0 && state.ultimoMinutoBeepato !== state.faseElapsed) {
+    // Fasi senza agitazione (lavaggio, imbibente): solo un promemoria ogni minuto trascorso.
     state.ultimoMinutoBeepato = state.faseElapsed;
     beepMinuto();
   }
@@ -900,7 +972,8 @@ function templateStep2() {
   const config = getConfigurazioneSelezionata();
   const volumeTotale = config.volumeMl;
   const rodinalN = state.diluizione === '1+25' ? 25 : 50;
-  const tempoSviluppo = TEMPI_SVILUPPO[film.id][state.diluizione];
+  const tempoSviluppoBase = TEMPI_SVILUPPO[film.id][state.diluizione];
+  const tempoSviluppoCorretto = calcolaTempoConTemperatura(tempoSviluppoBase, state.temperaturaRilevata);
   const faseArresto = FASI_FISSE.find(f => f.key === 'arresto');
   const faseFissaggio = FASI_FISSE.find(f => f.key === 'fissaggio');
   const faseImbibente = FASI_FISSE.find(f => f.key === 'imbibente');
@@ -918,7 +991,37 @@ function templateStep2() {
       <span>${volumeTotale} ml totali</span>
     </div>
 
-    ${templateChemCard('RODINAL', 'Rivelatore', rodinalN, volumeTotale, tempoSviluppo, STANDARD_AGITAZIONE, "Usa un cilindro graduato da 25 ml per il Rodinal: la quantita' e' ridotta.")}
+    <div class="data-card rounded-2xl p-4 bg-camera-900 mb-3">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <i data-lucide="thermometer" class="w-4 h-4 text-paperdim"></i>
+          <p class="font-display text-sm uppercase tracking-wide text-paper">Temperatura rivelatore</p>
+        </div>
+        <span class="font-mono text-[11px] text-paperdim">Consigliata ${TEMPERATURA_RIFERIMENTO}°C</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <input
+          id="input-temperatura"
+          type="number"
+          step="0.5" min="5" max="35"
+          value="${state.temperaturaRilevata}"
+          oninput="impostaTemperatura(this.value)"
+          class="w-24 bg-camera-800 border border-camera-700 rounded-lg px-3 py-2 font-mono text-lg text-paper text-center focus:outline-none focus:border-rodinal"
+        />
+        <span class="text-paperdim font-mono text-sm">°C rilevati</span>
+      </div>
+      <div class="mt-3 pt-3 border-t border-camera-700">
+        <p class="text-[11px] text-paperdim uppercase tracking-wide mb-1">Tempo di sviluppo corretto</p>
+        <p class="font-mono text-2xl text-rodinal" id="tempo-sviluppo-corretto">${fmtMMSS(tempoSviluppoCorretto)}</p>
+        <p id="tempo-sviluppo-nota" class="text-[11px] text-paperdim mt-1">${
+          Math.round(tempoSviluppoCorretto) === tempoSviluppoBase
+            ? `Uguale al tempo base (${fmtMMSS(tempoSviluppoBase)} a ${TEMPERATURA_RIFERIMENTO}°C)`
+            : `Base ${fmtMMSS(tempoSviluppoBase)} a ${TEMPERATURA_RIFERIMENTO}°C &middot; corretto per ${state.temperaturaRilevata}°C`
+        }</p>
+      </div>
+    </div>
+
+    ${templateChemCard('RODINAL', 'Rivelatore', rodinalN, volumeTotale, tempoSviluppoCorretto, STANDARD_AGITAZIONE, "Usa un cilindro graduato da 25 ml per il Rodinal: la quantita' e' ridotta.")}
     ${templateChemCard('ADOSTOP', 'Arresto', 19, volumeTotale, faseArresto.durata, faseArresto.schemaAgitazione)}
     ${templateChemCard('ADOFIX', 'Fissaggio', 4, volumeTotale, faseFissaggio.durata, faseFissaggio.schemaAgitazione)}
     ${templateChemCard('ADOFLO', 'Imbibente', 200, volumeTotale, faseImbibente.durata, faseImbibente.schemaAgitazione, "Diluizione stimata: verifica la scheda tecnica del tuo lotto Adoflo.")}
@@ -1016,10 +1119,15 @@ function templateStep3() {
       <button onclick="nuovaSessione()" class="w-9 h-9 rounded-full bg-neutral-900 flex items-center justify-center text-neutral-400 active:scale-95 transition-transform">
         <i data-lucide="x" class="w-4 h-4"></i>
       </button>
-      <button onclick="toggleAvanzamentoAutomatico()" class="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-neutral-400 bg-neutral-900 rounded-full px-3 py-2">
-        <span class="w-2 h-2 rounded-full ${state.avanzamentoAutomatico ? 'bg-yellow-300' : 'bg-neutral-600'}"></span>
-        Auto
-      </button>
+      <div class="flex items-center gap-2">
+        <button onclick="toggleSuonoAgitazione()" class="w-9 h-9 rounded-full bg-neutral-900 flex items-center justify-center text-neutral-400 active:scale-95 transition-transform">
+          <i data-lucide="${state.suonoAgitazioneAttivo ? 'volume-2' : 'volume-x'}" class="w-4 h-4"></i>
+        </button>
+        <button onclick="toggleAvanzamentoAutomatico()" class="flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-neutral-400 bg-neutral-900 rounded-full px-3 py-2">
+          <span class="w-2 h-2 rounded-full ${state.avanzamentoAutomatico ? 'bg-yellow-300' : 'bg-neutral-600'}"></span>
+          Auto
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 flex flex-col items-center justify-center">
